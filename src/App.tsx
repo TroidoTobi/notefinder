@@ -99,9 +99,9 @@ const CLEF_META: Record<Clef, { label: string; symbol: string; bottomLineMidi: n
 
 const DEFAULT_SETUP: Setup = {
   mode: 'learn',
-  noteSet: 'natural',
-  instrument: 'bass',
-  clef: 'bass',
+  noteSet: 'chromatic',
+  instrument: 'viola',
+  clef: 'alto',
   fretMin: 0,
   fretMax: 7,
   enabledStrings: [0, 1, 2, 3],
