@@ -18,7 +18,8 @@
 
 ## Code Layout
 - `src/main.tsx` is the only app entrypoint.
-- `src/App.tsx` contains nearly all product logic and UI subcomponents (`SetupPanel`, `GameScreen`, `Fretboard`, `ResultsScreen`) in one file. Read this file before making behavioral changes.
+- `src/App.tsx` contains nearly all product logic and UI subcomponents (`SetupPanel`, `GameScreen`, `NoteStaff`, `Fretboard`, `ResultsScreen`) in one file. Read this file before making behavioral changes.
+- Target generation and answer validation now work on exact MIDI pitches, not pitch classes, so octave matters.
 - Styling lives in `src/App.css` and `src/index.css`.
 
 ## Deployment Quirk

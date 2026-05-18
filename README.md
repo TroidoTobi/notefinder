@@ -1,15 +1,26 @@
-# Bass Fretboard Trainer
+# Fretboard Staff Trainer
 
-A web-based trainer for learning note positions on a 4-string bass fretboard.
+A web-based trainer for learning where written notes lie on a 4-string fretboard.
 
 ## Features
 
 - Learn mode and speed mode
+- Staff-notation prompts instead of note-name prompts
+- Selectable clef: treble, alto, tenor, or bass
+- Instrument presets for violin, viola, cello, and bass
 - Natural-note and chromatic training
 - Configurable fret range, enabled strings, timer, and question count
-- Correct answer validation by pitch class, so every valid position counts
+- Correct answer validation by exact written pitch, including octave
 - Mobile-friendly fretboard UI
 - GitHub Pages deployment workflow included
+
+## How It Works
+
+- The app shows a single note on a five-line staff.
+- The chosen clef affects how that note is rendered, but clef choice is independent from the instrument preset.
+- The selected instrument preset changes the open-string tuning and displayed string labels.
+- Frets still represent semitone steps, so the same fretboard UI is reused for all supported instruments.
+- Answers are checked against the exact target pitch, not just the pitch class.
 
 ## Local Development
 
