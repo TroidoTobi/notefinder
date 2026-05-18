@@ -20,6 +20,7 @@
 - `src/main.tsx` is the only app entrypoint.
 - `src/App.tsx` contains nearly all product logic and UI subcomponents (`SetupPanel`, `GameScreen`, `NoteStaff`, `Fretboard`, `ResultsScreen`) in one file. Read this file before making behavioral changes.
 - Target generation and answer validation now work on exact MIDI pitches, not pitch classes, so octave matters.
+- The `bass` preset uses octave-transposed written notation (`writtenMidiOffset: 12`); violin, viola, and cello stay at concert pitch.
 - Styling lives in `src/App.css` and `src/index.css`.
 
 ## Deployment Quirk

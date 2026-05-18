@@ -19,6 +19,7 @@ A web-based trainer for learning where written notes lie on a 4-string fretboard
 - The app shows a single note on a five-line staff.
 - The chosen clef affects how that note is rendered, but clef choice is independent from the instrument preset.
 - The selected instrument preset changes the open-string tuning and displayed string labels.
+- The bass preset uses standard bass-guitar notation, so written notes appear one octave above sounding pitch. Violin, viola, and cello are not transposed.
 - Frets still represent semitone steps, so the same fretboard UI is reused for all supported instruments.
 - Answers are checked against the exact target pitch, not just the pitch class.
 

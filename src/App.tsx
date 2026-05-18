@@ -60,26 +60,33 @@ const NATURAL_PITCH_CLASSES = [0, 2, 4, 5, 7, 9, 11]
 const SINGLE_INLAY_FRETS = new Set([3, 5, 7, 9, 15, 17])
 const DOUBLE_INLAY_FRETS = new Set([12, 24])
 
-const INSTRUMENT_PRESETS: Record<Instrument, { label: string; stringLabels: string[]; openStringMidis: number[] }> = {
+const INSTRUMENT_PRESETS: Record<
+  Instrument,
+  { label: string; stringLabels: string[]; openStringMidis: number[]; writtenMidiOffset: number }
+> = {
   violin: {
     label: 'Violin',
     stringLabels: ['E', 'A', 'D', 'G'],
     openStringMidis: [76, 69, 62, 55],
+    writtenMidiOffset: 0,
   },
   viola: {
     label: 'Viola',
     stringLabels: ['A', 'D', 'G', 'C'],
     openStringMidis: [69, 62, 55, 48],
+    writtenMidiOffset: 0,
   },
   cello: {
     label: 'Cello',
     stringLabels: ['A', 'D', 'G', 'C'],
     openStringMidis: [57, 50, 43, 36],
+    writtenMidiOffset: 0,
   },
   bass: {
     label: 'Bass',
     stringLabels: ['G', 'D', 'A', 'E'],
     openStringMidis: [43, 38, 33, 28],
+    writtenMidiOffset: 12,
   },
 }
 
@@ -130,6 +137,10 @@ function getMidiNote(stringIndex: number, fret: number, setup: Setup) {
   return getInstrumentPreset(setup.instrument).openStringMidis[stringIndex] + fret
 }
 
+function getWrittenMidi(midi: number, instrument: Instrument) {
+  return midi + getInstrumentPreset(instrument).writtenMidiOffset
+}
+
 function isPlayableTarget(midi: number, noteSet: NoteSet) {
   return noteSet === 'chromatic' || NATURAL_PITCH_CLASSES.includes(getPitchClass(midi))
 }
@@ -139,6 +150,10 @@ function getNoteLabel(midi: number) {
   const octave = Math.floor(midi / 12) - 1
 
   return `${CHROMATIC_LABELS[pitchClass]}${octave}`
+}
+
+function getWrittenNoteLabel(midi: number, instrument: Instrument) {
+  return getNoteLabel(getWrittenMidi(midi, instrument))
 }
 
 function getValidPositions(targetMidi: number, setup: Setup) {
@@ -184,7 +199,7 @@ function generateNextTarget(setup: Setup, previousMidi?: number) {
 
   return {
     targetMidi,
-    targetLabel: getNoteLabel(targetMidi),
+    targetLabel: getWrittenNoteLabel(targetMidi, setup.instrument),
   }
 }
 
@@ -709,7 +724,7 @@ function GameScreen({
             <span className="prompt-chip">{INSTRUMENT_PRESETS[setup.instrument].label}</span>
             <span className="prompt-chip">{CLEF_META[setup.clef].label}</span>
           </div>
-          <NoteStaff midi={round.targetMidi} clef={setup.clef} />
+          <NoteStaff midi={round.targetMidi} clef={setup.clef} instrument={setup.instrument} />
           <p className="prompt-copy">Tap any matching written note on the fretboard.</p>
           {setup.timeLimitMs !== null && timeRemainingMs !== null && (
             <TimerBar remainingMs={timeRemainingMs} totalMs={setup.timeLimitMs} />
@@ -756,19 +771,30 @@ function GameScreen({
   )
 }
 
-function NoteStaff({ midi, clef }: { midi: number; clef: Clef }) {
+function NoteStaff({
+  midi,
+  clef,
+  instrument,
+}: {
+  midi: number
+  clef: Clef
+  instrument: Instrument
+}) {
   const lineGap = 14
   const stepGap = lineGap / 2
   const bottomLineY = 88
   const noteX = 144
   const clefMeta = CLEF_META[clef]
-  const noteIndex = getDiatonicIndex(midi)
+  const writtenMidi = getWrittenMidi(midi, instrument)
+  const noteIndex = getDiatonicIndex(writtenMidi)
   const bottomLineIndex = getDiatonicIndex(clefMeta.bottomLineMidi)
   const stepOffset = noteIndex - bottomLineIndex
   const noteY = bottomLineY - stepOffset * stepGap
-  const pitchClass = getPitchClass(midi)
+  const pitchClass = getPitchClass(writtenMidi)
   const hasAccidental = !NATURAL_PITCH_CLASSES.includes(pitchClass)
   const ledgerLines: number[] = []
+  const noteTop = noteY - 12
+  const noteBottom = noteY + 12
 
   for (let lineOffset = -2; lineOffset >= stepOffset; lineOffset -= 2) {
     ledgerLines.push(bottomLineY - lineOffset * stepGap)
@@ -779,10 +805,16 @@ function NoteStaff({ midi, clef }: { midi: number; clef: Clef }) {
   }
 
   const stemDirection = stepOffset >= 4 ? 'down' : 'up'
+  const stemTop = stemDirection === 'up' ? noteY - 42 : noteY
+  const stemBottom = stemDirection === 'down' ? noteY + 42 : noteY
+  const contentTop = Math.min(20, bottomLineY - 4 * lineGap, ...ledgerLines, noteTop, stemTop, hasAccidental ? noteY - 18 : noteTop)
+  const contentBottom = Math.max(96, bottomLineY, ...ledgerLines, noteBottom, stemBottom, hasAccidental ? noteY + 18 : noteBottom)
+  const viewBoxY = contentTop - 10
+  const viewBoxHeight = contentBottom - contentTop + 20
 
   return (
-    <div className="prompt-note" aria-label={`${clefMeta.label}, ${getNoteLabel(midi)}`}>
-      <svg viewBox="0 0 260 136" role="img" aria-hidden="true">
+    <div className="prompt-note" aria-label={`${clefMeta.label}, ${getWrittenNoteLabel(midi, instrument)}`}>
+      <svg viewBox={`0 ${viewBoxY} 260 ${viewBoxHeight}`} role="img" aria-hidden="true">
         {[0, 1, 2, 3, 4].map((lineIndex) => {
           const y = bottomLineY - lineIndex * lineGap
           return <line key={lineIndex} x1="20" y1={y} x2="236" y2={y} className="staff-line" />
@@ -952,7 +984,7 @@ function StringRow({
             className={`fret-cell ${visualState} ${isNut ? 'nut' : ''}`}
             disabled={!enabled}
             onClick={() => onCellClick({ stringIndex, fret, pitchClass, midi })}
-            aria-label={`${stringLabel} string fret ${fret}, ${getNoteLabel(midi)}`}
+            aria-label={`${stringLabel} string fret ${fret}, ${getWrittenNoteLabel(midi, setup.instrument)}`}
           >
             <span
               className="string-line"
@@ -986,7 +1018,7 @@ function ResultsScreen({
 }) {
   const mistakeEntries = Object.entries(session.mistakesByNote)
     .sort((first, second) => Number(first[0]) - Number(second[0]))
-    .map(([midi, count]) => `${getNoteLabel(Number(midi))}: ${count}`)
+    .map(([midi, count]) => `${getWrittenNoteLabel(Number(midi), setup.instrument)}: ${count}`)
 
   return (
     <section className="results-layout">
