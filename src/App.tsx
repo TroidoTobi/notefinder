@@ -90,11 +90,21 @@ const INSTRUMENT_PRESETS: Record<
   },
 }
 
-const CLEF_META: Record<Clef, { label: string; symbol: string; bottomLineMidi: number }> = {
-  treble: { label: 'Violin clef', symbol: '𝄞', bottomLineMidi: 64 },
-  alto: { label: 'Viola clef', symbol: '𝄡', bottomLineMidi: 53 },
-  tenor: { label: 'Tenor clef', symbol: '𝄡', bottomLineMidi: 50 },
-  bass: { label: 'Bass clef', symbol: '𝄢', bottomLineMidi: 43 },
+const CLEF_META: Record<
+  Clef,
+  { label: string; symbol: string; bottomLineMidi: number; x: number; yOffset: number; fontSize: number }
+> = {
+  treble: { label: 'Violin clef', symbol: '𝄞', bottomLineMidi: 64, x: 54, yOffset: -18, fontSize: 56 },
+  alto: { label: 'Viola clef', symbol: '𝄡', bottomLineMidi: 53, x: 58, yOffset: 0, fontSize: 58 },
+  tenor: { label: 'Tenor clef', symbol: '𝄡', bottomLineMidi: 50, x: 58, yOffset: -1, fontSize: 58 },
+  bass: { label: 'Bass clef', symbol: '𝄢', bottomLineMidi: 43, x: 58, yOffset: 9, fontSize: 54 },
+}
+
+const STAFF_VIEWBOX = {
+  x: 0,
+  y: -16,
+  width: 260,
+  height: 164,
 }
 
 const DEFAULT_SETUP: Setup = {
@@ -784,7 +794,10 @@ function NoteStaff({
   const stepGap = lineGap / 2
   const bottomLineY = 88
   const noteX = 144
+  const noteHeadRx = 10
+  const noteHeadRy = 6
   const clefMeta = CLEF_META[clef]
+  const clefCenterY = getClefCenterY(clef, bottomLineY, lineGap) + clefMeta.yOffset
   const writtenMidi = getWrittenMidi(midi, instrument)
   const noteIndex = getDiatonicIndex(writtenMidi)
   const bottomLineIndex = getDiatonicIndex(clefMeta.bottomLineMidi)
@@ -793,8 +806,6 @@ function NoteStaff({
   const pitchClass = getPitchClass(writtenMidi)
   const hasAccidental = !NATURAL_PITCH_CLASSES.includes(pitchClass)
   const ledgerLines: number[] = []
-  const noteTop = noteY - 12
-  const noteBottom = noteY + 12
 
   for (let lineOffset = -2; lineOffset >= stepOffset; lineOffset -= 2) {
     ledgerLines.push(bottomLineY - lineOffset * stepGap)
@@ -805,16 +816,14 @@ function NoteStaff({
   }
 
   const stemDirection = stepOffset >= 4 ? 'down' : 'up'
-  const stemTop = stemDirection === 'up' ? noteY - 42 : noteY
-  const stemBottom = stemDirection === 'down' ? noteY + 42 : noteY
-  const contentTop = Math.min(20, bottomLineY - 4 * lineGap, ...ledgerLines, noteTop, stemTop, hasAccidental ? noteY - 18 : noteTop)
-  const contentBottom = Math.max(96, bottomLineY, ...ledgerLines, noteBottom, stemBottom, hasAccidental ? noteY + 18 : noteBottom)
-  const viewBoxY = contentTop - 10
-  const viewBoxHeight = contentBottom - contentTop + 20
 
   return (
     <div className="prompt-note" aria-label={`${clefMeta.label}, ${getWrittenNoteLabel(midi, instrument)}`}>
-      <svg viewBox={`0 ${viewBoxY} 260 ${viewBoxHeight}`} role="img" aria-hidden="true">
+      <svg
+        viewBox={`${STAFF_VIEWBOX.x} ${STAFF_VIEWBOX.y} ${STAFF_VIEWBOX.width} ${STAFF_VIEWBOX.height}`}
+        role="img"
+        aria-hidden="true"
+      >
         {[0, 1, 2, 3, 4].map((lineIndex) => {
           const y = bottomLineY - lineIndex * lineGap
           return <line key={lineIndex} x1="20" y1={y} x2="236" y2={y} className="staff-line" />
@@ -824,26 +833,50 @@ function NoteStaff({
           <line key={y} x1={noteX - 20} y1={y} x2={noteX + 20} y2={y} className="ledger-line" />
         ))}
 
-        <text x="56" y="64" className="clef-glyph">
+        <text
+          x={clefMeta.x}
+          y={clefCenterY}
+          className="clef-glyph"
+          style={{ fontSize: `${clefMeta.fontSize}px` }}
+        >
           {clefMeta.symbol}
         </text>
 
         {hasAccidental && (
-          <text x={noteX - 34} y={noteY + 6} className="accidental-glyph">
+          <text x={noteX - 26} y={noteY} className="accidental-glyph">
             #
           </text>
         )}
 
-        <ellipse cx={noteX} cy={noteY} rx="16" ry="11" className="note-head" transform={`rotate(-20 ${noteX} ${noteY})`} />
+        <ellipse
+          cx={noteX}
+          cy={noteY}
+          rx={noteHeadRx}
+          ry={noteHeadRy}
+          className="note-head"
+          transform={`rotate(-20 ${noteX} ${noteY})`}
+        />
 
         {stemDirection === 'up' ? (
-          <line x1={noteX + 12} y1={noteY} x2={noteX + 12} y2={noteY - 42} className="note-stem" />
+          <line x1={noteX + 9} y1={noteY - 2} x2={noteX + 9} y2={noteY - 40} className="note-stem" />
         ) : (
-          <line x1={noteX - 12} y1={noteY} x2={noteX - 12} y2={noteY + 42} className="note-stem" />
+          <line x1={noteX - 9} y1={noteY + 2} x2={noteX - 9} y2={noteY + 40} className="note-stem" />
         )}
       </svg>
     </div>
   )
+}
+
+function getClefCenterY(clef: Clef, bottomLineY: number, lineGap: number) {
+  switch (clef) {
+    case 'treble':
+      return bottomLineY - lineGap
+    case 'alto':
+      return bottomLineY - 2 * lineGap
+    case 'tenor':
+    case 'bass':
+      return bottomLineY - 3 * lineGap
+  }
 }
 
 function getDiatonicIndex(midi: number) {
