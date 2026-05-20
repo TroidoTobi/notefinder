@@ -7,6 +7,15 @@ type Clef = 'treble' | 'alto' | 'tenor' | 'bass'
 type Instrument = 'violin' | 'viola' | 'cello' | 'bass'
 type RoundStatus = 'active' | 'answered' | 'timed_out'
 type Feedback = 'correct' | 'wrong' | null
+type NoteLetter = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G'
+
+type NoteSpelling = {
+  letter: NoteLetter
+  accidental: '#' | 'b' | null
+  octave: number
+  label: string
+  diatonicIndex: number
+}
 
 type Setup = {
   mode: Mode
@@ -23,6 +32,7 @@ type Setup = {
 
 type Round = {
   targetMidi: number
+  targetSpelling: NoteSpelling
   targetLabel: string
   startedAt: number
   deadlineAt: number | null
@@ -57,6 +67,7 @@ type UIState = {
 const STRING_THICKNESS = [2, 2.5, 3, 3.5]
 const CHROMATIC_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const NATURAL_PITCH_CLASSES = [0, 2, 4, 5, 7, 9, 11]
+const LETTER_INDEX: Record<NoteLetter, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 }
 const SINGLE_INLAY_FRETS = new Set([3, 5, 7, 9, 15, 17])
 const DOUBLE_INLAY_FRETS = new Set([12, 24])
 
@@ -162,6 +173,55 @@ function getNoteLabel(midi: number) {
   return `${CHROMATIC_LABELS[pitchClass]}${octave}`
 }
 
+function getDiatonicIndexFromParts(letter: NoteLetter, octave: number) {
+  return octave * 7 + LETTER_INDEX[letter]
+}
+
+function createNoteSpelling(writtenMidi: number, preferFlats = false): NoteSpelling {
+  const pitchClass = getPitchClass(writtenMidi)
+  const octave = Math.floor(writtenMidi / 12) - 1
+
+  const sharpSpellings: Record<number, { letter: NoteLetter; accidental: '#' | null }> = {
+    0: { letter: 'C', accidental: null },
+    1: { letter: 'C', accidental: '#' },
+    2: { letter: 'D', accidental: null },
+    3: { letter: 'D', accidental: '#' },
+    4: { letter: 'E', accidental: null },
+    5: { letter: 'F', accidental: null },
+    6: { letter: 'F', accidental: '#' },
+    7: { letter: 'G', accidental: null },
+    8: { letter: 'G', accidental: '#' },
+    9: { letter: 'A', accidental: null },
+    10: { letter: 'A', accidental: '#' },
+    11: { letter: 'B', accidental: null },
+  }
+  const flatSpellings: Record<number, { letter: NoteLetter; accidental: 'b' | null }> = {
+    0: { letter: 'C', accidental: null },
+    1: { letter: 'D', accidental: 'b' },
+    2: { letter: 'D', accidental: null },
+    3: { letter: 'E', accidental: 'b' },
+    4: { letter: 'E', accidental: null },
+    5: { letter: 'F', accidental: null },
+    6: { letter: 'G', accidental: 'b' },
+    7: { letter: 'G', accidental: null },
+    8: { letter: 'A', accidental: 'b' },
+    9: { letter: 'A', accidental: null },
+    10: { letter: 'B', accidental: 'b' },
+    11: { letter: 'B', accidental: null },
+  }
+
+  const spelling = preferFlats ? flatSpellings[pitchClass] : sharpSpellings[pitchClass]
+  const label = `${spelling.letter}${spelling.accidental ?? ''}${octave}`
+
+  return {
+    letter: spelling.letter,
+    accidental: spelling.accidental,
+    octave,
+    label,
+    diatonicIndex: getDiatonicIndexFromParts(spelling.letter, octave),
+  }
+}
+
 function getWrittenNoteLabel(midi: number, instrument: Instrument) {
   return getNoteLabel(getWrittenMidi(midi, instrument))
 }
@@ -206,10 +266,17 @@ function generateNextTarget(setup: Setup, previousMidi?: number) {
       ? playableMidis
       : playableMidis.filter((midi) => midi !== previousMidi)
   const targetMidi = availableMidis[Math.floor(Math.random() * availableMidis.length)]
+  const writtenMidi = getWrittenMidi(targetMidi, setup.instrument)
+  const pitchClass = getPitchClass(writtenMidi)
+  const targetSpelling = createNoteSpelling(
+    writtenMidi,
+    setup.noteSet === 'chromatic' && !NATURAL_PITCH_CLASSES.includes(pitchClass) && Math.random() < 0.5,
+  )
 
   return {
     targetMidi,
-    targetLabel: getWrittenNoteLabel(targetMidi, setup.instrument),
+    targetSpelling,
+    targetLabel: targetSpelling.label,
   }
 }
 
@@ -273,6 +340,7 @@ function App() {
       setUi(createInitialUI())
       setRound({
         targetMidi: target.targetMidi,
+        targetSpelling: target.targetSpelling,
         targetLabel: target.targetLabel,
         startedAt: Date.now(),
         deadlineAt,
@@ -734,7 +802,7 @@ function GameScreen({
             <span className="prompt-chip">{INSTRUMENT_PRESETS[setup.instrument].label}</span>
             <span className="prompt-chip">{CLEF_META[setup.clef].label}</span>
           </div>
-          <NoteStaff midi={round.targetMidi} clef={setup.clef} instrument={setup.instrument} />
+          <NoteStaff spelling={round.targetSpelling} clef={setup.clef} />
           <p className="prompt-copy">Tap any matching written note on the fretboard.</p>
           {setup.timeLimitMs !== null && timeRemainingMs !== null && (
             <TimerBar remainingMs={timeRemainingMs} totalMs={setup.timeLimitMs} />
@@ -782,13 +850,11 @@ function GameScreen({
 }
 
 function NoteStaff({
-  midi,
+  spelling,
   clef,
-  instrument,
 }: {
-  midi: number
+  spelling: NoteSpelling
   clef: Clef
-  instrument: Instrument
 }) {
   const lineGap = 14
   const stepGap = lineGap / 2
@@ -798,13 +864,13 @@ function NoteStaff({
   const noteHeadRy = 6
   const clefMeta = CLEF_META[clef]
   const clefCenterY = getClefCenterY(clef, bottomLineY, lineGap) + clefMeta.yOffset
-  const writtenMidi = getWrittenMidi(midi, instrument)
-  const noteIndex = getDiatonicIndex(writtenMidi)
+  const noteIndex = spelling.diatonicIndex
   const bottomLineIndex = getDiatonicIndex(clefMeta.bottomLineMidi)
   const stepOffset = noteIndex - bottomLineIndex
   const noteY = bottomLineY - stepOffset * stepGap
-  const pitchClass = getPitchClass(writtenMidi)
-  const hasAccidental = !NATURAL_PITCH_CLASSES.includes(pitchClass)
+  const accidentalSymbol = spelling.accidental === '#' ? '♯' : spelling.accidental === 'b' ? '♭' : null
+  const accidentalX = noteX - (spelling.accidental === 'b' ? 24 : 26)
+  const accidentalY = noteY + (spelling.accidental === 'b' ? -11 : -11)
   const ledgerLines: number[] = []
 
   for (let lineOffset = -2; lineOffset >= stepOffset; lineOffset -= 2) {
@@ -818,7 +884,7 @@ function NoteStaff({
   const stemDirection = stepOffset >= 4 ? 'down' : 'up'
 
   return (
-    <div className="prompt-note" aria-label={`${clefMeta.label}, ${getWrittenNoteLabel(midi, instrument)}`}>
+    <div className="prompt-note" aria-label={`${clefMeta.label}, ${spelling.label}`}>
       <svg
         viewBox={`${STAFF_VIEWBOX.x} ${STAFF_VIEWBOX.y} ${STAFF_VIEWBOX.width} ${STAFF_VIEWBOX.height}`}
         role="img"
@@ -842,9 +908,9 @@ function NoteStaff({
           {clefMeta.symbol}
         </text>
 
-        {hasAccidental && (
-          <text x={noteX - 26} y={noteY} className="accidental-glyph">
-            #
+        {accidentalSymbol !== null && (
+          <text x={accidentalX} y={accidentalY} className={`accidental-glyph accidental-${spelling.accidental}`}>
+            {accidentalSymbol}
           </text>
         )}
 
