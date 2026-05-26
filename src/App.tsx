@@ -17,6 +17,24 @@ type NoteSpelling = {
   diatonicIndex: number
 }
 
+type HistoryFilterValue<T extends string> = T | 'all'
+
+type SessionHistoryEntry = {
+  id: string
+  completedAt: number
+  instrument: Instrument
+  clef: Clef
+  noteSet: NoteSet
+  mode: Mode
+  questionCount: number
+  correctCount: number
+  wrongCount: number
+  accuracy: number
+  averageReactionTime: number | null
+  mistakesByNote: Record<string, number>
+  mistakesByString: Record<number, number>
+}
+
 type Setup = {
   mode: Mode
   noteSet: NoteSet
@@ -70,6 +88,8 @@ const NATURAL_PITCH_CLASSES = [0, 2, 4, 5, 7, 9, 11]
 const LETTER_INDEX: Record<NoteLetter, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 }
 const SINGLE_INLAY_FRETS = new Set([3, 5, 7, 9, 15, 17])
 const DOUBLE_INLAY_FRETS = new Set([12, 24])
+const SESSION_HISTORY_STORAGE_KEY = 'notefinder-session-history-v1'
+const SESSION_HISTORY_LIMIT = 100
 
 const INSTRUMENT_PRESETS: Record<
   Instrument,
@@ -226,6 +246,89 @@ function getWrittenNoteLabel(midi: number, instrument: Instrument) {
   return getNoteLabel(getWrittenMidi(midi, instrument))
 }
 
+function calculateAccuracy(session: Session) {
+  const totalAttempts = session.correctCount + session.wrongCount
+  return totalAttempts === 0 ? 0 : Math.round((session.correctCount / totalAttempts) * 100)
+}
+
+function calculateAverageReactionTime(session: Session) {
+  return session.reactionTimes.length === 0
+    ? null
+    : Math.round(session.reactionTimes.reduce((sum, value) => sum + value, 0) / session.reactionTimes.length)
+}
+
+function createSessionHistoryEntry(setup: Setup, session: Session): SessionHistoryEntry | null {
+  const totalAttempts = session.correctCount + session.wrongCount
+
+  if (totalAttempts === 0) {
+    return null
+  }
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    completedAt: Date.now(),
+    instrument: setup.instrument,
+    clef: setup.clef,
+    noteSet: setup.noteSet,
+    mode: setup.mode,
+    questionCount: setup.questionCount,
+    correctCount: session.correctCount,
+    wrongCount: session.wrongCount,
+    accuracy: calculateAccuracy(session),
+    averageReactionTime: calculateAverageReactionTime(session),
+    mistakesByNote: session.mistakesByNote,
+    mistakesByString: session.mistakesByString,
+  }
+}
+
+function loadSessionHistory() {
+  if (typeof window === 'undefined') {
+    return [] as SessionHistoryEntry[]
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SESSION_HISTORY_STORAGE_KEY)
+    if (raw === null) {
+      return []
+    }
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+
+    return parsed.filter((entry): entry is SessionHistoryEntry => {
+      return (
+        typeof entry?.id === 'string' &&
+        typeof entry?.completedAt === 'number' &&
+        typeof entry?.instrument === 'string' &&
+        typeof entry?.clef === 'string' &&
+        typeof entry?.noteSet === 'string' &&
+        typeof entry?.mode === 'string' &&
+        typeof entry?.questionCount === 'number' &&
+        typeof entry?.correctCount === 'number' &&
+        typeof entry?.wrongCount === 'number' &&
+        typeof entry?.accuracy === 'number' &&
+        (typeof entry?.averageReactionTime === 'number' || entry?.averageReactionTime === null) &&
+        typeof entry?.mistakesByNote === 'object' &&
+        entry?.mistakesByNote !== null &&
+        typeof entry?.mistakesByString === 'object' &&
+        entry?.mistakesByString !== null
+      )
+    })
+  } catch {
+    return []
+  }
+}
+
+function saveSessionHistory(history: SessionHistoryEntry[]) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(SESSION_HISTORY_STORAGE_KEY, JSON.stringify(history))
+}
+
 function getValidPositions(targetMidi: number, setup: Setup) {
   const positions: FretCellData[] = []
 
@@ -310,14 +413,19 @@ function finalizeRound(session: Session, result: { correct: boolean; reactionTim
 }
 
 function App() {
-  const [screen, setScreen] = useState<'setup' | 'game' | 'results'>('setup')
+  const [screen, setScreen] = useState<'setup' | 'game' | 'results' | 'history'>('setup')
   const [setup, setSetup] = useState<Setup>(DEFAULT_SETUP)
   const [session, setSession] = useState<Session>(createEmptySession)
   const [round, setRound] = useState<Round | null>(null)
   const [ui, setUi] = useState<UIState>(createInitialUI)
   const [timeRemainingMs, setTimeRemainingMs] = useState<number | null>(null)
+  const [sessionHistory, setSessionHistory] = useState<SessionHistoryEntry[]>([])
   const advanceTimeoutRef = useRef<number | null>(null)
   const sessionRef = useRef(session)
+
+  useEffect(() => {
+    setSessionHistory(loadSessionHistory())
+  }, [])
 
   useEffect(() => {
     sessionRef.current = session
@@ -351,6 +459,20 @@ function App() {
     [round?.targetMidi, session, setup],
   )
 
+  const persistCompletedSession = useCallback((setupSnapshot: Setup, sessionSnapshot: Session) => {
+    const entry = createSessionHistoryEntry(setupSnapshot, sessionSnapshot)
+
+    if (entry === null) {
+      return
+    }
+
+    setSessionHistory((currentHistory) => {
+      const nextHistory = [...currentHistory, entry].slice(-SESSION_HISTORY_LIMIT)
+      saveSessionHistory(nextHistory)
+      return nextHistory
+    })
+  }, [])
+
   const scheduleAdvance = useCallback((nextSession: Session) => {
     if (advanceTimeoutRef.current !== null) {
       window.clearTimeout(advanceTimeoutRef.current)
@@ -358,6 +480,7 @@ function App() {
 
     advanceTimeoutRef.current = window.setTimeout(() => {
       if (nextSession.currentQuestion > setup.questionCount) {
+        persistCompletedSession(setup, nextSession)
         setScreen('results')
         setRound(null)
         setTimeRemainingMs(null)
@@ -365,7 +488,7 @@ function App() {
         beginRound(nextSession)
       }
     }, 650)
-  }, [beginRound, setup.questionCount])
+  }, [beginRound, persistCompletedSession, setup])
 
   function startSession() {
     const nextSession = createEmptySession()
@@ -379,6 +502,7 @@ function App() {
       advanceTimeoutRef.current = null
     }
 
+    persistCompletedSession(setup, sessionRef.current)
     setScreen('results')
     setRound(null)
     setTimeRemainingMs(null)
@@ -516,12 +640,8 @@ function App() {
     }
   }
 
-  const totalAttempts = session.correctCount + session.wrongCount
-  const accuracy = totalAttempts === 0 ? 0 : Math.round((session.correctCount / totalAttempts) * 100)
-  const averageReactionTime =
-    session.reactionTimes.length === 0
-      ? null
-      : Math.round(session.reactionTimes.reduce((sum, value) => sum + value, 0) / session.reactionTimes.length)
+  const accuracy = calculateAccuracy(session)
+  const averageReactionTime = calculateAverageReactionTime(session)
 
   return (
     <div className="app-shell">
@@ -568,6 +688,14 @@ function App() {
             averageReactionTime={averageReactionTime}
             onRestart={startSession}
             onBackToSetup={restartToSetup}
+            onViewHistory={() => setScreen('history')}
+          />
+        )}
+
+        {screen === 'history' && (
+          <HistoryScreen
+            history={sessionHistory}
+            onBack={() => setScreen('results')}
           />
         )}
       </div>
@@ -1107,6 +1235,7 @@ function ResultsScreen({
   averageReactionTime,
   onRestart,
   onBackToSetup,
+  onViewHistory,
 }: {
   setup: Setup
   session: Session
@@ -1114,6 +1243,7 @@ function ResultsScreen({
   averageReactionTime: number | null
   onRestart: () => void
   onBackToSetup: () => void
+  onViewHistory: () => void
 }) {
   const mistakeEntries = Object.entries(session.mistakesByNote)
     .sort((first, second) => first[0].localeCompare(second[0]))
@@ -1161,11 +1291,239 @@ function ResultsScreen({
         <button type="button" className="primary-button" onClick={onRestart}>
           Play Again
         </button>
+        <button type="button" onClick={onViewHistory}>
+          View History
+        </button>
         <button type="button" onClick={onBackToSetup}>
           Change Setup
         </button>
       </div>
     </section>
+  )
+}
+
+function HistoryScreen({
+  history,
+  onBack,
+}: {
+  history: SessionHistoryEntry[]
+  onBack: () => void
+}) {
+  const [instrumentFilter, setInstrumentFilter] = useState<HistoryFilterValue<Instrument>>('all')
+  const [clefFilter, setClefFilter] = useState<HistoryFilterValue<Clef>>('all')
+
+  const filteredHistory = history.filter((entry) => {
+    return (
+      (instrumentFilter === 'all' || entry.instrument === instrumentFilter) &&
+      (clefFilter === 'all' || entry.clef === clefFilter)
+    )
+  })
+
+  const totalWrong = filteredHistory.reduce((sum, entry) => sum + entry.wrongCount, 0)
+  const totalAttempts = filteredHistory.reduce((sum, entry) => sum + entry.correctCount + entry.wrongCount, 0)
+  const averageErrorRate = totalAttempts === 0 ? 0 : Math.round((totalWrong / totalAttempts) * 100)
+  const reactionTimeEntries = filteredHistory.filter((entry) => entry.averageReactionTime !== null)
+  const averageReaction =
+    reactionTimeEntries.length === 0
+      ? null
+      : Math.round(
+          reactionTimeEntries.reduce((sum, entry) => sum + (entry.averageReactionTime ?? 0), 0) / reactionTimeEntries.length,
+        )
+
+  const noteMistakes = filteredHistory.reduce<Record<string, number>>((accumulator, entry) => {
+    for (const [label, count] of Object.entries(entry.mistakesByNote)) {
+      accumulator[label] = (accumulator[label] ?? 0) + count
+    }
+
+    return accumulator
+  }, {})
+
+  const topMistakes = Object.entries(noteMistakes)
+    .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]))
+    .slice(0, 10)
+
+  const errorSeries = filteredHistory.map((entry) => ({
+    id: entry.id,
+    value: 100 - entry.accuracy,
+    label: new Date(entry.completedAt).toLocaleDateString(),
+  }))
+  const reactionSeries = filteredHistory.map((entry) => ({
+    id: entry.id,
+    value: entry.averageReactionTime,
+    label: new Date(entry.completedAt).toLocaleDateString(),
+  }))
+
+  return (
+    <section className="history-layout">
+      <div className="panel history-hero">
+        <div className="history-heading">
+          <div>
+            <p className="eyebrow">Progress History</p>
+            <h2>Track your last {SESSION_HISTORY_LIMIT} sessions and keep pushing the graph toward 0% error.</h2>
+          </div>
+          <button type="button" onClick={onBack}>
+            Back to Results
+          </button>
+        </div>
+
+        <div className="history-filters">
+          <label>
+            <span>Instrument</span>
+            <select
+              value={instrumentFilter}
+              onChange={(event) => setInstrumentFilter(event.target.value as HistoryFilterValue<Instrument>)}
+            >
+              <option value="all">All instruments</option>
+              <option value="violin">Violin</option>
+              <option value="viola">Viola</option>
+              <option value="cello">Cello</option>
+              <option value="bass">Bass</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Clef</span>
+            <select value={clefFilter} onChange={(event) => setClefFilter(event.target.value as HistoryFilterValue<Clef>)}>
+              <option value="all">All clefs</option>
+              <option value="treble">Violin clef</option>
+              <option value="alto">Viola clef</option>
+              <option value="tenor">Tenor clef</option>
+              <option value="bass">Bass clef</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="history-stats">
+          <div>
+            <span className="stat-label">Sessions in view</span>
+            <strong>{filteredHistory.length}</strong>
+          </div>
+          <div>
+            <span className="stat-label">Average error</span>
+            <strong>{averageErrorRate}%</strong>
+          </div>
+          <div>
+            <span className="stat-label">Average speed</span>
+            <strong>{averageReaction === null ? 'n/a' : `${averageReaction} ms`}</strong>
+          </div>
+          <div>
+            <span className="stat-label">Total prompts</span>
+            <strong>{totalAttempts}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="history-chart-grid">
+        <TrendChart
+          title="Error Rate"
+          subtitle="Each point is one finished session. Lower is better."
+          series={errorSeries}
+          suffix="%"
+          minValue={0}
+          maxValue={100}
+        />
+        <TrendChart
+          title="Average Answer Speed"
+          subtitle="Only answered prompts contribute to the average reaction time."
+          series={reactionSeries}
+          suffix=" ms"
+          formatValue={(value) => `${(value / 1000).toFixed(1)} s`}
+        />
+      </div>
+
+      <div className="panel history-detail">
+        <h3>Most Missed Notes</h3>
+        {topMistakes.length === 0 ? (
+          <p>No mistakes recorded for the selected history yet.</p>
+        ) : (
+          <div className="history-mistakes">
+            {topMistakes.map(([label, count]) => (
+              <div key={label} className="history-mistake-row">
+                <span>{label}</span>
+                <strong>{count}</strong>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function TrendChart({
+  title,
+  subtitle,
+  series,
+  suffix,
+  minValue,
+  maxValue,
+  formatValue,
+}: {
+  title: string
+  subtitle: string
+  series: Array<{ id: string; value: number | null; label: string }>
+  suffix: string
+  minValue?: number
+  maxValue?: number
+  formatValue?: (value: number) => string
+}) {
+  const validValues = series.flatMap((entry) => (entry.value === null ? [] : [entry.value]))
+  const resolvedMin = minValue ?? (validValues.length === 0 ? 0 : Math.min(...validValues))
+  const resolvedMax = maxValue ?? (validValues.length === 0 ? 100 : Math.max(...validValues))
+  const paddedMax = resolvedMax === resolvedMin ? resolvedMax + 1 : resolvedMax
+  const chartWidth = 520
+  const chartHeight = 220
+  const padding = { top: 20, right: 18, bottom: 32, left: 72 }
+  const innerWidth = chartWidth - padding.left - padding.right
+  const innerHeight = chartHeight - padding.top - padding.bottom
+
+  const points = series.map((entry, index) => {
+    const x = padding.left + (series.length <= 1 ? innerWidth / 2 : (index / (series.length - 1)) * innerWidth)
+    const y =
+      entry.value === null
+        ? null
+        : padding.top + innerHeight - ((entry.value - resolvedMin) / (paddedMax - resolvedMin)) * innerHeight
+
+    return { ...entry, x, y }
+  })
+
+  const linePath = points.reduce((path, point) => {
+    if (point.y === null) {
+      return path
+    }
+
+    return `${path}${path === '' ? 'M' : ' L'} ${point.x} ${point.y}`
+  }, '')
+
+  return (
+    <div className="panel history-chart-panel">
+      <h3>{title}</h3>
+      <p>{subtitle}</p>
+      {validValues.length === 0 ? (
+        <div className="history-empty">No matching session data yet.</div>
+      ) : (
+        <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="history-chart" role="img" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((index) => {
+            const y = padding.top + (index / 4) * innerHeight
+            const tickValue = Math.round(paddedMax - (index / 4) * (paddedMax - resolvedMin))
+
+            return (
+              <g key={index}>
+                <line x1={padding.left} y1={y} x2={chartWidth - padding.right} y2={y} className="chart-grid-line" />
+                <text x={padding.left - 10} y={y} className="chart-axis-label">
+                  {formatValue ? formatValue(tickValue) : `${tickValue}${suffix}`}
+                </text>
+              </g>
+            )
+          })}
+
+          {linePath !== '' && <path d={linePath} className="chart-line" />}
+          {points.map((point) =>
+            point.y === null ? null : <circle key={point.id} cx={point.x} cy={point.y} r="4" className="chart-point" />,
+          )}
+        </svg>
+      )}
+    </div>
   )
 }
 

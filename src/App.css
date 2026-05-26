@@ -46,7 +46,8 @@
 
 .panel-grid,
 .game-layout,
-.results-layout {
+.results-layout,
+.history-layout {
   display: grid;
   gap: 20px;
 }
@@ -70,7 +71,10 @@
 .mini-stats,
 .control-bar,
 .results-hero,
-.results-detail {
+.results-detail,
+.history-hero,
+.history-detail,
+.history-chart-panel {
   padding: 20px;
 }
 
@@ -261,6 +265,13 @@
   gap: 16px;
 }
 
+.history-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
 .mini-stats {
   align-items: start;
 }
@@ -269,6 +280,12 @@
 .results-stats strong {
   display: block;
   margin-top: 6px;
+  font-size: 1.6rem;
+}
+
+.history-stats strong {
+  display: block;
+  margin-top: 12px;
   font-size: 1.6rem;
 }
 
@@ -440,10 +457,124 @@
   color: #eff3ff;
 }
 
+.history-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-heading h2,
+.history-chart-panel h3,
+.history-detail h3 {
+  margin: 0;
+}
+
+.history-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.history-filters label {
+  display: grid;
+  gap: 8px;
+}
+
+.history-filters span,
+.chart-axis-label {
+  color: #8c9bbb;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.history-filters select {
+  width: 100%;
+  border: 1px solid rgba(138, 180, 255, 0.16);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #081224;
+  color: #eff3ff;
+}
+
+.history-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.history-chart-panel p,
+.history-detail p,
+.history-empty {
+  color: #b8c2db;
+}
+
+.history-chart-panel p {
+  margin: 10px 0 0;
+}
+
+.history-chart {
+  width: 100%;
+  height: auto;
+  margin-top: 16px;
+}
+
+.chart-grid-line {
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  text-anchor: end;
+  dominant-baseline: middle;
+}
+
+.chart-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-line {
+  stroke: #8ab4ff;
+  stroke-width: 3;
+}
+
+.chart-point {
+  fill: #eff3ff;
+  stroke: #8ab4ff;
+  stroke-width: 2;
+}
+
+.history-empty {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+}
+
+.history-mistakes {
+  display: grid;
+  gap: 12px;
+}
+
+.history-mistake-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
 @media (max-width: 900px) {
   .panel-grid,
   .game-topbar,
   .results-stats,
+  .history-stats,
+  .history-chart-grid,
   .field-grid,
   .control-bar {
     grid-template-columns: 1fr;
@@ -488,6 +619,9 @@
   .control-bar,
   .results-hero,
   .results-detail,
+  .history-hero,
+  .history-detail,
+  .history-chart-panel,
   .fretboard-panel {
     padding: 10px;
   }
@@ -626,6 +760,15 @@
 
   .control-bar span {
     font-size: 0.82rem;
+  }
+
+  .history-heading {
+    flex-direction: column;
+  }
+
+  .history-filters {
+    grid-template-columns: 1fr;
+    margin-top: 14px;
   }
 }
 
