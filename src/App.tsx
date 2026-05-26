@@ -5,6 +5,8 @@ type Mode = 'learn' | 'speed'
 type NoteSet = 'natural' | 'chromatic'
 type Clef = 'treble' | 'alto' | 'tenor' | 'bass'
 type Instrument = 'violin' | 'viola' | 'cello' | 'bass'
+type TrainingType = 'single' | 'interval'
+type IntervalDifficulty = 1 | 2 | 3
 type RoundStatus = 'active' | 'answered' | 'timed_out'
 type Feedback = 'correct' | 'wrong' | null
 type NoteLetter = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G'
@@ -25,6 +27,8 @@ type SessionHistoryEntry = {
   instrument: Instrument
   clef: Clef
   noteSet: NoteSet
+  training: TrainingType
+  intervalDifficulty: IntervalDifficulty
   mode: Mode
   questionCount: number
   correctCount: number
@@ -38,6 +42,8 @@ type SessionHistoryEntry = {
 type Setup = {
   mode: Mode
   noteSet: NoteSet
+  training: TrainingType
+  intervalDifficulty: IntervalDifficulty
   instrument: Instrument
   clef: Clef
   fretMin: number
@@ -48,10 +54,15 @@ type Setup = {
   showStringLabels: boolean
 }
 
+type PromptTarget = {
+  midi: number
+  spelling: NoteSpelling
+  label: string
+}
+
 type Round = {
-  targetMidi: number
-  targetSpelling: NoteSpelling
-  targetLabel: string
+  targets: PromptTarget[]
+  activeTargetIndex: number
   startedAt: number
   deadlineAt: number | null
   status: RoundStatus
@@ -90,6 +101,7 @@ const SINGLE_INLAY_FRETS = new Set([3, 5, 7, 9, 15, 17])
 const DOUBLE_INLAY_FRETS = new Set([12, 24])
 const SESSION_HISTORY_STORAGE_KEY = 'notefinder-session-history-v1'
 const SESSION_HISTORY_LIMIT = 100
+const INTERVAL_ADVANCE_DELAY_MS = 450
 
 const INSTRUMENT_PRESETS: Record<
   Instrument,
@@ -141,6 +153,8 @@ const STAFF_VIEWBOX = {
 const DEFAULT_SETUP: Setup = {
   mode: 'learn',
   noteSet: 'chromatic',
+  training: 'single',
+  intervalDifficulty: 1,
   instrument: 'viola',
   clef: 'alto',
   fretMin: 0,
@@ -270,6 +284,8 @@ function createSessionHistoryEntry(setup: Setup, session: Session): SessionHisto
     instrument: setup.instrument,
     clef: setup.clef,
     noteSet: setup.noteSet,
+    training: setup.training,
+    intervalDifficulty: setup.intervalDifficulty,
     mode: setup.mode,
     questionCount: setup.questionCount,
     correctCount: session.correctCount,
@@ -304,6 +320,8 @@ function loadSessionHistory() {
         typeof entry?.instrument === 'string' &&
         typeof entry?.clef === 'string' &&
         typeof entry?.noteSet === 'string' &&
+        typeof entry?.training === 'string' &&
+        typeof entry?.intervalDifficulty === 'number' &&
         typeof entry?.mode === 'string' &&
         typeof entry?.questionCount === 'number' &&
         typeof entry?.correctCount === 'number' &&
@@ -362,30 +380,72 @@ function getAvailableTargetMidis(setup: Setup) {
   return [...availableMidis].sort((first, second) => first - second)
 }
 
-function generateNextTarget(setup: Setup, previousMidi?: number) {
-  const playableMidis = getAvailableTargetMidis(setup)
-  const availableMidis =
-    previousMidi === undefined || playableMidis.length === 1
-      ? playableMidis
-      : playableMidis.filter((midi) => midi !== previousMidi)
-  const targetMidi = availableMidis[Math.floor(Math.random() * availableMidis.length)]
-  const writtenMidi = getWrittenMidi(targetMidi, setup.instrument)
+function createPromptTarget(midi: number, setup: Setup): PromptTarget {
+  const writtenMidi = getWrittenMidi(midi, setup.instrument)
   const pitchClass = getPitchClass(writtenMidi)
-  const targetSpelling = createNoteSpelling(
+  const spelling = createNoteSpelling(
     writtenMidi,
     setup.noteSet === 'chromatic' && !NATURAL_PITCH_CLASSES.includes(pitchClass) && Math.random() < 0.5,
   )
 
   return {
-    targetMidi,
-    targetSpelling,
-    targetLabel: targetSpelling.label,
+    midi,
+    spelling,
+    label: spelling.label,
   }
 }
 
+function getIntervalMaxSemitones(difficulty: IntervalDifficulty) {
+  switch (difficulty) {
+    case 1:
+      return 5
+    case 2:
+      return 9
+    case 3:
+      return 12
+  }
+}
+
+function generateNextRoundTargets(setup: Setup, previousMidi?: number) {
+  const playableMidis = getAvailableTargetMidis(setup)
+  const availableMidis =
+    previousMidi === undefined || playableMidis.length === 1
+      ? playableMidis
+      : playableMidis.filter((midi) => midi !== previousMidi)
+  const firstMidi = availableMidis[Math.floor(Math.random() * availableMidis.length)]
+
+  if (setup.training === 'single') {
+    return [createPromptTarget(firstMidi, setup)]
+  }
+
+  const maxSemitones = getIntervalMaxSemitones(setup.intervalDifficulty)
+  const validFirstMidis = availableMidis.filter((candidateMidi) => {
+    return playableMidis.some((midi) => {
+      const distance = Math.abs(midi - candidateMidi)
+      return distance >= 1 && distance <= maxSemitones
+    })
+  })
+  const resolvedFirstMidi =
+    validFirstMidis.length > 0
+      ? validFirstMidis[Math.floor(Math.random() * validFirstMidis.length)]
+      : firstMidi
+  const intervalOptions = playableMidis.filter((midi) => {
+    const distance = Math.abs(midi - resolvedFirstMidi)
+    return distance >= 1 && distance <= maxSemitones
+  })
+
+  const secondMidi =
+    intervalOptions.length > 0
+      ? intervalOptions[Math.floor(Math.random() * intervalOptions.length)]
+      : resolvedFirstMidi
+
+  return [createPromptTarget(resolvedFirstMidi, setup), createPromptTarget(secondMidi, setup)]
+}
+
 function evaluateAnswer(cell: FretCellData, round: Round, setup: Setup) {
-  const correct = cell.midi === round.targetMidi
-  const validPositions = getValidPositions(round.targetMidi, setup)
+  const activeTarget = round.targets[round.activeTargetIndex]
+  const correct = cell.midi === activeTarget.midi
+  const validPositions = getValidPositions(activeTarget.midi, setup)
 
   return {
     correct,
@@ -421,6 +481,7 @@ function App() {
   const [timeRemainingMs, setTimeRemainingMs] = useState<number | null>(null)
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryEntry[]>([])
   const advanceTimeoutRef = useRef<number | null>(null)
+  const intervalAdvanceTimeoutRef = useRef<number | null>(null)
   const sessionRef = useRef(session)
 
   useEffect(() => {
@@ -436,27 +497,31 @@ function App() {
       if (advanceTimeoutRef.current !== null) {
         window.clearTimeout(advanceTimeoutRef.current)
       }
+
+      if (intervalAdvanceTimeoutRef.current !== null) {
+        window.clearTimeout(intervalAdvanceTimeoutRef.current)
+      }
     }
   }, [])
 
   const beginRound = useCallback(
     (nextSession = session) => {
-      const target = generateNextTarget(setup, round?.targetMidi)
+      const previousMidi = round?.targets[round.targets.length - 1]?.midi
+      const targets = generateNextRoundTargets(setup, previousMidi)
       const deadlineAt = setup.mode === 'speed' && setup.timeLimitMs !== null ? Date.now() + setup.timeLimitMs : null
 
       setSession(nextSession)
       setUi(createInitialUI())
       setRound({
-        targetMidi: target.targetMidi,
-        targetSpelling: target.targetSpelling,
-        targetLabel: target.targetLabel,
+        targets,
+        activeTargetIndex: 0,
         startedAt: Date.now(),
         deadlineAt,
         status: 'active',
       })
       setTimeRemainingMs(deadlineAt === null ? null : setup.timeLimitMs)
     },
-    [round?.targetMidi, session, setup],
+    [round, session, setup],
   )
 
   const persistCompletedSession = useCallback((setupSnapshot: Setup, sessionSnapshot: Session) => {
@@ -502,6 +567,11 @@ function App() {
       advanceTimeoutRef.current = null
     }
 
+    if (intervalAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(intervalAdvanceTimeoutRef.current)
+      intervalAdvanceTimeoutRef.current = null
+    }
+
     persistCompletedSession(setup, sessionRef.current)
     setScreen('results')
     setRound(null)
@@ -513,6 +583,11 @@ function App() {
     if (advanceTimeoutRef.current !== null) {
       window.clearTimeout(advanceTimeoutRef.current)
       advanceTimeoutRef.current = null
+    }
+
+    if (intervalAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(intervalAdvanceTimeoutRef.current)
+      intervalAdvanceTimeoutRef.current = null
     }
 
     setScreen('setup')
@@ -529,13 +604,14 @@ function App() {
       }
 
       const currentSession = sessionRef.current
-      const revealedCorrectPositions = getValidPositions(currentRound.targetMidi, setup)
+      const activeTarget = currentRound.targets[currentRound.activeTargetIndex]
+      const revealedCorrectPositions = getValidPositions(activeTarget.midi, setup)
       const updatedSession: Session = {
         ...currentSession,
         wrongCount: currentSession.wrongCount + 1,
         mistakesByNote: {
           ...currentSession.mistakesByNote,
-          [currentRound.targetLabel]: (currentSession.mistakesByNote[currentRound.targetLabel] ?? 0) + 1,
+          [activeTarget.label]: (currentSession.mistakesByNote[activeTarget.label] ?? 0) + 1,
         },
       }
       const finalized = finalizeRound(updatedSession, { correct: false, reactionTimeMs: null })
@@ -577,7 +653,7 @@ function App() {
   }, [handleTimeout, round, screen])
 
   function handleCellClick(cell: FretCellData) {
-    if (round === null || round.status !== 'active') {
+    if (round === null || round.status !== 'active' || ui.feedback === 'correct') {
       return
     }
 
@@ -586,6 +662,44 @@ function App() {
     const selectedCell = { stringIndex: cell.stringIndex, fret: cell.fret }
 
     if (result.correct) {
+      const isLastTarget = round.activeTargetIndex === round.targets.length - 1
+
+      if (!isLastTarget) {
+        const updatedSession: Session = {
+          ...currentSession,
+          reactionTimes: [...currentSession.reactionTimes, result.reactionTimeMs],
+        }
+
+        setUi({
+          selectedCell,
+          feedback: 'correct',
+          revealedCorrectPositions: result.validPositions,
+        })
+        setSession(updatedSession)
+
+        if (intervalAdvanceTimeoutRef.current !== null) {
+          window.clearTimeout(intervalAdvanceTimeoutRef.current)
+        }
+
+        intervalAdvanceTimeoutRef.current = window.setTimeout(() => {
+          setUi(createInitialUI())
+          setRound((currentRound) => {
+            if (currentRound === null) {
+              return currentRound
+            }
+
+            return {
+              ...currentRound,
+              activeTargetIndex: currentRound.activeTargetIndex + 1,
+              startedAt: Date.now(),
+            }
+          })
+          intervalAdvanceTimeoutRef.current = null
+        }, INTERVAL_ADVANCE_DELAY_MS)
+
+        return
+      }
+
       const finalized = finalizeRound(currentSession, {
         correct: true,
         reactionTimeMs: result.reactionTimeMs,
@@ -610,7 +724,8 @@ function App() {
       wrongCount: currentSession.wrongCount + 1,
       mistakesByNote: {
         ...currentSession.mistakesByNote,
-        [round.targetLabel]: (currentSession.mistakesByNote[round.targetLabel] ?? 0) + 1,
+        [round.targets[round.activeTargetIndex].label]:
+          (currentSession.mistakesByNote[round.targets[round.activeTargetIndex].label] ?? 0) + 1,
       },
       mistakesByString: {
         ...currentSession.mistakesByString,
@@ -753,6 +868,17 @@ function SetupPanel({
           </label>
 
           <label>
+            <span>Training</span>
+            <select
+              value={setup.training}
+              onChange={(event) => onChange({ ...setup, training: event.target.value as TrainingType })}
+            >
+              <option value="single">Single notes</option>
+              <option value="interval">Intervals</option>
+            </select>
+          </label>
+
+          <label>
             <span>Mode</span>
             <select
               value={setup.mode}
@@ -782,6 +908,22 @@ function SetupPanel({
               <option value="chromatic">Chromatic</option>
             </select>
           </label>
+
+          {setup.training === 'interval' && (
+            <label>
+              <span>Interval difficulty</span>
+              <select
+                value={String(setup.intervalDifficulty)}
+                onChange={(event) =>
+                  onChange({ ...setup, intervalDifficulty: Number(event.target.value) as IntervalDifficulty })
+                }
+              >
+                <option value="1">Level 1: 1-5 semitones</option>
+                <option value="2">Level 2: 1-9 semitones</option>
+                <option value="3">Level 3: 1-12 semitones</option>
+              </select>
+            </label>
+          )}
 
           <label>
             <span>Lowest fret</span>
@@ -885,6 +1027,7 @@ function SetupPanel({
         <h2>How it works</h2>
         <ul>
           <li>The prompt is shown as standard notation on a five-line staff.</li>
+          <li>Single-note mode asks for one note. Interval mode asks for two notes in order.</li>
           <li>The clef is chosen separately from the instrument preset.</li>
           <li>Any matching written pitch on the enabled strings and fret range is correct.</li>
           <li>Learn mode lets the player retry the same note after mistakes.</li>
@@ -929,9 +1072,14 @@ function GameScreen({
           <div className="prompt-meta">
             <span className="prompt-chip">{INSTRUMENT_PRESETS[setup.instrument].label}</span>
             <span className="prompt-chip">{CLEF_META[setup.clef].label}</span>
+            <span className="prompt-chip">{setup.training === 'single' ? 'Single note' : 'Interval'}</span>
           </div>
-          <NoteStaff spelling={round.targetSpelling} clef={setup.clef} />
-          <p className="prompt-copy">Tap any matching written note on the fretboard.</p>
+          <NoteStaff spellings={round.targets.map((target) => target.spelling)} activeIndex={round.activeTargetIndex} clef={setup.clef} />
+          <p className="prompt-copy">
+            {setup.training === 'single'
+              ? 'Tap any matching written note on the fretboard.'
+              : `Tap the ${round.activeTargetIndex === 0 ? 'first' : 'second'} note shown on the staff.`}
+          </p>
           {setup.timeLimitMs !== null && timeRemainingMs !== null && (
             <TimerBar remainingMs={timeRemainingMs} totalMs={setup.timeLimitMs} />
           )}
@@ -978,41 +1126,72 @@ function GameScreen({
 }
 
 function NoteStaff({
-  spelling,
+  spellings,
+  activeIndex,
   clef,
 }: {
-  spelling: NoteSpelling
+  spellings: NoteSpelling[]
+  activeIndex: number
   clef: Clef
 }) {
   const lineGap = 14
   const stepGap = lineGap / 2
   const bottomLineY = 88
-  const noteX = 144
   const noteHeadRx = 10
   const noteHeadRy = 6
   const clefMeta = CLEF_META[clef]
   const clefCenterY = getClefCenterY(clef, bottomLineY, lineGap) + clefMeta.yOffset
-  const noteIndex = spelling.diatonicIndex
   const bottomLineIndex = getDiatonicIndex(clefMeta.bottomLineMidi)
-  const stepOffset = noteIndex - bottomLineIndex
-  const noteY = bottomLineY - stepOffset * stepGap
-  const accidentalSymbol = spelling.accidental === '#' ? '♯' : spelling.accidental === 'b' ? '♭' : null
-  const accidentalX = noteX - (spelling.accidental === 'b' ? 24 : 26)
-  const accidentalY = noteY + (spelling.accidental === 'b' ? -11 : -11)
-  const ledgerLines: number[] = []
+  const noteXs = spellings.length === 1 ? [144] : [118, 188]
+  const notes = spellings.map((spelling, index) => {
+    const noteIndex = spelling.diatonicIndex
+    const stepOffset = noteIndex - bottomLineIndex
+    const noteY = bottomLineY - stepOffset * stepGap
+    const previousSpelling = index > 0 ? spellings[index - 1] : null
+    const showNatural =
+      spelling.accidental === null &&
+      previousSpelling !== null &&
+      previousSpelling.letter === spelling.letter &&
+      previousSpelling.accidental !== null
+    const accidentalSymbol =
+      spelling.accidental === '#'
+        ? '♯'
+        : spelling.accidental === 'b'
+          ? '♭'
+          : showNatural
+            ? '♮'
+            : null
+    const noteX = noteXs[index] ?? 144
+    const accidentalKind = spelling.accidental ?? (showNatural ? 'natural' : null)
+    const accidentalX =
+      accidentalKind === 'b' ? noteX - 24 : accidentalKind === 'natural' ? noteX - 27 : noteX - 26
+    const accidentalY = noteY + (accidentalKind === 'b' ? -11 : accidentalKind === 'natural' ? -9 : -11)
+    const ledgerLines: number[] = []
 
-  for (let lineOffset = -2; lineOffset >= stepOffset; lineOffset -= 2) {
-    ledgerLines.push(bottomLineY - lineOffset * stepGap)
-  }
+    for (let lineOffset = -2; lineOffset >= stepOffset; lineOffset -= 2) {
+      ledgerLines.push(bottomLineY - lineOffset * stepGap)
+    }
 
-  for (let lineOffset = 10; lineOffset <= stepOffset; lineOffset += 2) {
-    ledgerLines.push(bottomLineY - lineOffset * stepGap)
-  }
+    for (let lineOffset = 10; lineOffset <= stepOffset; lineOffset += 2) {
+      ledgerLines.push(bottomLineY - lineOffset * stepGap)
+    }
 
-  const stemDirection = stepOffset >= 4 ? 'down' : 'up'
+    return {
+      spelling,
+      noteX,
+      noteY,
+      accidentalX,
+      accidentalY,
+      accidentalSymbol,
+      accidentalKind,
+      ledgerLines,
+      stemDirection: stepOffset >= 4 ? 'down' : ('up' as const),
+      isActive: index === activeIndex,
+    }
+  })
 
   return (
-    <div className="prompt-note" aria-label={`${clefMeta.label}, ${spelling.label}`}>
+    <div className="prompt-note" aria-label={`${clefMeta.label}, ${spellings.map((spelling) => spelling.label).join(', ')}`}>
       <svg
         viewBox={`${STAFF_VIEWBOX.x} ${STAFF_VIEWBOX.y} ${STAFF_VIEWBOX.width} ${STAFF_VIEWBOX.height}`}
         role="img"
@@ -1023,10 +1202,6 @@ function NoteStaff({
           return <line key={lineIndex} x1="20" y1={y} x2="236" y2={y} className="staff-line" />
         })}
 
-        {ledgerLines.map((y) => (
-          <line key={y} x1={noteX - 20} y1={y} x2={noteX + 20} y2={y} className="ledger-line" />
-        ))}
-
         <text
           x={clefMeta.x}
           y={clefCenterY}
@@ -1036,26 +1211,38 @@ function NoteStaff({
           {clefMeta.symbol}
         </text>
 
-        {accidentalSymbol !== null && (
-          <text x={accidentalX} y={accidentalY} className={`accidental-glyph accidental-${spelling.accidental}`}>
-            {accidentalSymbol}
-          </text>
-        )}
+        {notes.map((note) => (
+          <g key={`${note.spelling.label}-${note.noteX}`} className={note.isActive ? 'staff-note active' : 'staff-note inactive'}>
+            {note.ledgerLines.map((y) => (
+              <line key={`${note.noteX}-${y}`} x1={note.noteX - 20} y1={y} x2={note.noteX + 20} y2={y} className="ledger-line" />
+            ))}
 
-        <ellipse
-          cx={noteX}
-          cy={noteY}
-          rx={noteHeadRx}
-          ry={noteHeadRy}
-          className="note-head"
-          transform={`rotate(-20 ${noteX} ${noteY})`}
-        />
+            {note.accidentalSymbol !== null && (
+              <text
+                x={note.accidentalX}
+                y={note.accidentalY}
+                className={`accidental-glyph accidental-${note.accidentalKind}`}
+              >
+                {note.accidentalSymbol}
+              </text>
+            )}
 
-        {stemDirection === 'up' ? (
-          <line x1={noteX + 9} y1={noteY - 2} x2={noteX + 9} y2={noteY - 40} className="note-stem" />
-        ) : (
-          <line x1={noteX - 9} y1={noteY + 2} x2={noteX - 9} y2={noteY + 40} className="note-stem" />
-        )}
+            <ellipse
+              cx={note.noteX}
+              cy={note.noteY}
+              rx={noteHeadRx}
+              ry={noteHeadRy}
+              className="note-head"
+              transform={`rotate(-20 ${note.noteX} ${note.noteY})`}
+            />
+
+            {note.stemDirection === 'up' ? (
+              <line x1={note.noteX + 9} y1={note.noteY - 2} x2={note.noteX + 9} y2={note.noteY - 40} className="note-stem" />
+            ) : (
+              <line x1={note.noteX - 9} y1={note.noteY + 2} x2={note.noteX - 9} y2={note.noteY + 40} className="note-stem" />
+            )}
+          </g>
+        ))}
       </svg>
     </div>
   )
@@ -1309,11 +1496,13 @@ function HistoryScreen({
   history: SessionHistoryEntry[]
   onBack: () => void
 }) {
+  const [trainingFilter, setTrainingFilter] = useState<HistoryFilterValue<TrainingType>>('all')
   const [instrumentFilter, setInstrumentFilter] = useState<HistoryFilterValue<Instrument>>('all')
   const [clefFilter, setClefFilter] = useState<HistoryFilterValue<Clef>>('all')
 
   const filteredHistory = history.filter((entry) => {
     return (
+      (trainingFilter === 'all' || entry.training === trainingFilter) &&
       (instrumentFilter === 'all' || entry.instrument === instrumentFilter) &&
       (clefFilter === 'all' || entry.clef === clefFilter)
     )
@@ -1367,6 +1556,18 @@ function HistoryScreen({
         </div>
 
         <div className="history-filters">
+          <label>
+            <span>Training</span>
+            <select
+              value={trainingFilter}
+              onChange={(event) => setTrainingFilter(event.target.value as HistoryFilterValue<TrainingType>)}
+            >
+              <option value="all">All training</option>
+              <option value="single">Single notes</option>
+              <option value="interval">Intervals</option>
+            </select>
+          </label>
+
           <label>
             <span>Instrument</span>
             <select
@@ -1424,7 +1625,7 @@ function HistoryScreen({
         />
         <TrendChart
           title="Average Answer Speed"
-          subtitle="Only answered prompts contribute to the average reaction time."
+          subtitle="Only answered notes contribute to the average reaction time."
           series={reactionSeries}
           suffix=" ms"
           formatValue={(value) => `${(value / 1000).toFixed(1)} s`}

@@ -233,6 +233,18 @@
   fill: #eff3ff;
 }
 
+.staff-note {
+  transition: opacity 0.18s ease;
+}
+
+.staff-note.inactive {
+  opacity: 0.38;
+}
+
+.staff-note.active {
+  opacity: 1;
+}
+
 .clef-glyph,
 .accidental-glyph {
   fill: #eff3ff;
@@ -472,7 +484,7 @@
 
 .history-filters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 220px));
+  grid-template-columns: repeat(3, minmax(0, 220px));
   gap: 16px;
   margin-top: 20px;
 }
