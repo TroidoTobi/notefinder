@@ -44,7 +44,7 @@ type Session = {
   correctCount: number
   wrongCount: number
   reactionTimes: number[]
-  mistakesByNote: Record<number, number>
+  mistakesByNote: Record<string, number>
   mistakesByString: Record<number, number>
 }
 
@@ -411,7 +411,7 @@ function App() {
         wrongCount: currentSession.wrongCount + 1,
         mistakesByNote: {
           ...currentSession.mistakesByNote,
-          [currentRound.targetMidi]: (currentSession.mistakesByNote[currentRound.targetMidi] ?? 0) + 1,
+          [currentRound.targetLabel]: (currentSession.mistakesByNote[currentRound.targetLabel] ?? 0) + 1,
         },
       }
       const finalized = finalizeRound(updatedSession, { correct: false, reactionTimeMs: null })
@@ -486,7 +486,7 @@ function App() {
       wrongCount: currentSession.wrongCount + 1,
       mistakesByNote: {
         ...currentSession.mistakesByNote,
-        [round.targetMidi]: (currentSession.mistakesByNote[round.targetMidi] ?? 0) + 1,
+        [round.targetLabel]: (currentSession.mistakesByNote[round.targetLabel] ?? 0) + 1,
       },
       mistakesByString: {
         ...currentSession.mistakesByString,
@@ -1116,8 +1116,8 @@ function ResultsScreen({
   onBackToSetup: () => void
 }) {
   const mistakeEntries = Object.entries(session.mistakesByNote)
-    .sort((first, second) => Number(first[0]) - Number(second[0]))
-    .map(([midi, count]) => `${getWrittenNoteLabel(Number(midi), setup.instrument)}: ${count}`)
+    .sort((first, second) => first[0].localeCompare(second[0]))
+    .map(([label, count]) => `${label}: ${count}`)
 
   return (
     <section className="results-layout">
